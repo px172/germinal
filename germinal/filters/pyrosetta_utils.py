@@ -106,7 +106,13 @@ def score_interface(pdb_file, binder_chain="B", target_chain="A"):
 
     # analyze interface statistics
     iam = InterfaceAnalyzerMover()
-    iam.set_interface("A_B")
+    # PyRosetta >=2026 takes a DockingPartners object; older releases take a string.
+    try:
+        from pyrosetta.rosetta.core.pose import DockingPartners
+
+        iam.set_interface(DockingPartners.docking_partners_from_string("A_B"))
+    except (ImportError, TypeError):
+        iam.set_interface("A_B")
     scorefxn = pr.get_fa_scorefxn()
     iam.set_scorefunction(scorefxn)
     iam.set_compute_packstat(True)
