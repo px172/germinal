@@ -74,5 +74,21 @@ uv pip install hydra-core omegaconf
 uv pip install "jax[cuda12_pip]==0.5.3" -f https://storage.googleapis.com/jax-releases/jax_cuda_releases.html
 uv pip install ablang2 --no-deps
 uv pip install rotary_embedding_torch --no-deps 
+uv pip install "transformers<5"
 ```
+
+> **Note:** `transformers` must stay on 4.x. It is pulled in transitively
+> (`colabdesign` → `iglm` → `transformers>=4.6.1`, which has no upper bound), so a
+> fresh install otherwise resolves to 5.x. In 5.x the `BertTokenizerFast`
+> `vocab_file=` keyword was renamed to `vocab=` and the old name is **silently
+> ignored** rather than raising. `iglm` still uses the old name, so its tokenizer
+> falls back to a 5-token vocabulary in which every amino acid and every
+> `[HEAVY]`/`[HUMAN]` token becomes `[UNK]`. The failure surfaces late, during the
+> filtering stage:
+>
+> ```
+> File "germinal/filters/filter_utils.py", line 842, in get_iglm_ll
+>     log_likelihood = model.log_likelihood(sequence, chain_token, species_token)
+> AssertionError: Unrecognized token supplied in starting tokens
+> ```
 
