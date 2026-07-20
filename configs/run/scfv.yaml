@@ -123,6 +123,14 @@ save_design_trajectory_plots: true
 
 # Other settings
 omit_AAs: "C"
+# Pin or forbid specific amino acids at specific CDR positions during
+# hallucination. Positions are 0-based within the CDR; a bare letter forces a
+# residue, "!XYZ" forbids the listed residues. CDR names: H1/H2/H3/L1/L2/L3
+# (scFv, heavy then light). Example:
+#   cdr_bias:
+#     H3: {0: "R", 5: "W"}   # force H3 pos 0 -> Arg, pos 5 -> Trp
+#     L1: {2: "!C"}          # forbid Cys at L1 pos 2
+cdr_bias: null
 force_reject_AA: false
 dgram_cce: 0.01
 show_config: true

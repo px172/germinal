@@ -276,6 +276,132 @@ def compute_cdr_positions(
     return positions
 
 
+# CDR names in the order they appear in cdr_lengths. Nanobodies have 3 CDRs
+# (heavy only); scFvs have 6 (heavy then light, matching the config comment in
+# configs/run/scfv.yaml). This is the same order compute_cdr_positions lays the
+# positions out in, so name -> segment index is just enumeration.
+_CDR_NAMES_BY_COUNT = {
+    3: ["H1", "H2", "H3"],
+    6: ["H1", "H2", "H3", "L1", "L2", "L3"],
+}
+
+
+def compute_cdr_ranges(
+    cdr_lengths: list[int], framework_lengths: list[int]
+) -> dict[str, tuple[int, int]]:
+    """Compute per-CDR binder-local position ranges.
+
+    Mirrors compute_cdr_positions but returns, for each named CDR, the
+    half-open [start, end) range of binder-local (0-based) residue indices it
+    occupies. These indices match the entries in cdr_positions and the
+    binder-local axis of the AlphaFold model's bias array.
+
+    Args:
+        cdr_lengths: CDR lengths in sequential order (heavy then light).
+        framework_lengths: Framework segment lengths (one per CDR, interleaved).
+
+    Returns:
+        Mapping of CDR name (e.g. "H3") to (start, end) binder-local indices.
+
+    Raises:
+        ValueError: If cdr_lengths has an unsupported number of CDRs.
+    """
+    if len(cdr_lengths) not in _CDR_NAMES_BY_COUNT:
+        raise ValueError(
+            f"cdr_bias only supports {sorted(_CDR_NAMES_BY_COUNT)} CDRs "
+            f"(nanobody / scFv), got {len(cdr_lengths)}."
+        )
+    names = _CDR_NAMES_BY_COUNT[len(cdr_lengths)]
+    cumulative = 0
+    ranges: dict[str, tuple[int, int]] = {}
+    for i, cdr_length in enumerate(cdr_lengths):
+        start = framework_lengths[i] + cumulative
+        ranges[names[i]] = (start, start + cdr_length)
+        cumulative = start + cdr_length
+    return ranges
+
+
+def resolve_cdr_bias(
+    cdr_bias: dict,
+    cdr_lengths: list[int],
+    framework_lengths: list[int],
+    valid_amino_acids: str = "ACDEFGHIKLMNPQRSTVWY",
+) -> list[tuple[int, str, str]]:
+    """Resolve a cdr_bias spec into concrete per-position amino-acid constraints.
+
+    The cdr_bias config lets a user pin or forbid specific amino acids at
+    specific CDR positions during hallucination. Schema::
+
+        cdr_bias:
+          H3: {0: "R", 5: "W"}   # force position 0 of H3 to Arg, 5 to Trp
+          L1: {2: "!C"}          # forbid Cys at position 2 of L1
+          L2: {1: "!CM"}         # forbid Cys and Met at position 1 of L2
+
+    Positions are 0-based within the CDR. A bare uppercase letter forces that
+    residue; a value beginning with "!" forbids each listed residue.
+
+    Args:
+        cdr_bias: The cdr_bias mapping from the run config.
+        cdr_lengths: CDR lengths (used to bound positions and name CDRs).
+        framework_lengths: Framework segment lengths (for absolute positions).
+        valid_amino_acids: Allowed one-letter codes.
+
+    Returns:
+        List of (binder_local_position, amino_acid, mode) tuples where mode is
+        "force" or "forbid". Forbidding N residues yields N tuples.
+
+    Raises:
+        ValueError: On unknown CDR name, out-of-range position, or invalid
+            amino acid, with a message identifying the offending entry.
+    """
+    ranges = compute_cdr_ranges(cdr_lengths, framework_lengths)
+    valid = set(valid_amino_acids)
+    resolved: list[tuple[int, str, str]] = []
+
+    for cdr_name, positions in cdr_bias.items():
+        if cdr_name not in ranges:
+            raise ValueError(
+                f"cdr_bias: unknown CDR '{cdr_name}' for this binder "
+                f"(available: {sorted(ranges)})."
+            )
+        start, end = ranges[cdr_name]
+        cdr_len = end - start
+        for raw_pos, spec in positions.items():
+            try:
+                pos = int(raw_pos)
+            except (TypeError, ValueError):
+                raise ValueError(
+                    f"cdr_bias[{cdr_name}]: position key '{raw_pos}' is not an integer."
+                )
+            if not 0 <= pos < cdr_len:
+                raise ValueError(
+                    f"cdr_bias[{cdr_name}]: position {pos} out of range "
+                    f"[0, {cdr_len}) for a CDR of length {cdr_len}."
+                )
+            abs_pos = start + pos
+            spec = str(spec).strip()
+            if spec.startswith("!"):
+                letters, mode = spec[1:], "forbid"
+            else:
+                letters, mode = spec, "force"
+            if not letters:
+                raise ValueError(
+                    f"cdr_bias[{cdr_name}][{pos}]: empty amino-acid spec."
+                )
+            if mode == "force" and len(letters) != 1:
+                raise ValueError(
+                    f"cdr_bias[{cdr_name}][{pos}]: force expects a single amino "
+                    f"acid, got '{letters}'. Use '!{letters}' to forbid several."
+                )
+            for aa in letters.upper():
+                if aa not in valid:
+                    raise ValueError(
+                        f"cdr_bias[{cdr_name}][{pos}]: invalid amino acid '{aa}'."
+                    )
+                resolved.append((abs_pos, aa, mode))
+    return resolved
+
+
 ######### BIOPYTHON UTILS #########
 
 

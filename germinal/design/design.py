@@ -36,7 +36,11 @@ from colabdesign import mk_afdesign_model, clear_mem
 from colabdesign.mpnn import mk_mpnn_model
 from colabdesign.af.alphafold.common import residue_constants
 from colabdesign.af.loss import get_ptm, mask_loss, get_dgram_bins
-from germinal.utils.utils import hotspot_residues, calculate_clash_score
+from germinal.utils.utils import (
+    hotspot_residues,
+    calculate_clash_score,
+    resolve_cdr_bias,
+)
 from germinal.utils.io import IO
 
 
@@ -191,7 +195,31 @@ def germinal_design(
             "cdrs": cdr_lengths,
         },
     )
-    
+
+    # Apply per-position CDR amino-acid constraints (cdr_bias). prep_inputs has
+    # already initialised af_model._inputs["bias"] (shape [binder_len, 20]);
+    # we add a large positive bias to force a residue and a large negative bias
+    # to forbid one, matching colabdesign's own add_seq / rm_aa idioms. The bias
+    # is added to the sequence logits every design step (and preserved through
+    # semigreedy), so forced positions stay pinned and forbidden ones stay out.
+    cdr_bias = run_settings.get("cdr_bias")
+    if cdr_bias:
+        aa_order = residue_constants.restype_order
+        bias = np.asarray(af_model._inputs["bias"], dtype=np.float64)
+        constraints = resolve_cdr_bias(cdr_bias, cdr_lengths, fw_lengths)
+        for abs_pos, aa, mode in constraints:
+            if mode == "force":
+                bias[abs_pos, aa_order[aa]] += 1e7
+            else:  # forbid
+                bias[abs_pos, aa_order[aa]] -= 1e6
+        af_model._inputs["bias"] = bias
+        forced = [(p, a) for p, a, m in constraints if m == "force"]
+        forbidden = [(p, a) for p, a, m in constraints if m == "forbid"]
+        print(
+            f"Applied cdr_bias: {len(forced)} forced {forced}, "
+            f"{len(forbidden)} forbidden {forbidden} (binder-local positions)"
+        )
+
     # Configure loss function weights based on specified settings
     af_model.opt["weights"].update(
         {
