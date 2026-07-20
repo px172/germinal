@@ -530,6 +530,11 @@ def _run_protenix(
         "-c", str(n_cycles),
         "-p", str(n_steps),
         "--use_msa", str(use_msa),
+        # Protenix only dumps the *_full_data_*.json (containing token_pair_pae)
+        # when need_atom_confidence is True. extract_protenix_scores needs that
+        # PAE matrix to compute pdockq2; without it the metric is None and every
+        # design fails the final pdockq2 filter. Default is False, so set it.
+        "--need_atom_confidence", "True",
     ]
 
     print(f"Running Protenix: {' '.join(run_cmds)}")
