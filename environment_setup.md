@@ -53,6 +53,15 @@ uv pip install iglm torchvision==0.21.* chai-lab==0.6.1 \
 
 > **Note:** ignore colabfold dependency errors
 
+> **Note (Blackwell / RTX 50-series / sm_120 GPUs):** The `torch==2.6.*`
+> wheels only ship kernels up to `sm_90`, so on a Blackwell GPU (compute
+> capability `sm_120`, e.g. RTX PRO 6000 / RTX 50-series) any Torch CUDA op
+> fails at runtime with `CUDA error: no kernel image is available for
+> execution on the device`. This breaks `chai-lab`, `IgLM`, and `AbLang2`,
+> and it does **not** fall back to CPU automatically (the models still see
+> `torch.cuda.is_available() == True`). The fix is in step 7 below — install
+> `chai-lab` here as-is, then upgrade Torch afterward.
+
 ---
 
 ## 5. Install Project in Editable Mode
@@ -91,4 +100,32 @@ uv pip install "transformers<5"
 >     log_likelihood = model.log_likelihood(sequence, chain_token, species_token)
 > AssertionError: Unrecognized token supplied in starting tokens
 > ```
+
+---
+
+## 7. Blackwell / sm_120 GPU Support
+
+Only needed on Blackwell GPUs (RTX PRO 6000, RTX 50-series). The stock
+`torch==2.6.*` build has no `sm_120` kernels, so `chai-lab`, `IgLM`, and
+`AbLang2` fail at runtime with `CUDA error: no kernel image is available for
+execution on the device` (and do **not** fall back to CPU). Upgrade to a CUDA
+12.8 build that ships `sm_120` kernels. `chai-lab` declares `torch<2.7`, so
+install it first (step 4) and upgrade Torch afterward — the upper bound is
+conservative and Chai-1 inference is verified working on 2.7.1.
+
+```bash
+uv pip install torch==2.7.1 torchvision==0.22.1 torchaudio==2.7.1 \
+  --index-url https://download.pytorch.org/whl/cu128
+```
+
+This also bumps the bundled `nvidia-*-cu12` libraries from 12.4 to 12.8;
+JAX shares these and continues to run on GPU unaffected. Verify with:
+
+```bash
+python -c "import torch, jax; print('sm_120' in torch.cuda.get_arch_list(), jax.default_backend())"
+# expected: True gpu
+```
+
+> **Note:** On non-Blackwell GPUs (sm_90 and below) skip this step and keep
+> `torch==2.6.*`.
 
