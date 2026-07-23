@@ -718,6 +718,116 @@ def run_af3(
     )
 
 
+def run_af3_batch(
+    designs: list,
+    output_dir: str,
+    run_settings: dict,
+    binder_chain: str = "B",
+    msa_mode: str = "none",
+    select_mode: str = "best",
+) -> dict:
+    """Run AF3 for several designs in ONE singularity invocation via --input_dir.
+
+    AF3 builds the model once (see run_alphafold.py: ModelRunner is created
+    before the `for fold_input in fold_inputs` loop) and JIT-compiles once for a
+    given input shape, so N same-length designs share a single container start +
+    weight load + compile instead of paying it N times. The per-design method is
+    otherwise identical to run_af3 (same JSON, MSA, seeds, samples). Intended for
+    batching the AbMPNN redesign predictions in the final filters.
+
+    Args:
+        designs: list of dicts, each with keys:
+            name (str), binder_seq (str), target_seq (list[str] | str),
+            target_chains (list[str] | str), seed (int | list[int]).
+        output_dir: AF3 output directory (== structures_directory).
+        run_settings, binder_chain, msa_mode, select_mode: as in run_af3.
+
+    Returns:
+        dict {design_name: (pdb_path, scores_dict, ipsae)} for each design.
+    """
+    # Same gate as run_af3: cache_binder_msa needs a real binder MSA.
+    if run_settings.get("cache_binder_msa", False) and msa_mode != "colabfold":
+        raise ValueError(
+            f"cache_binder_msa=True requires msa_mode='colabfold'; got "
+            f"msa_mode={msa_mode!r}."
+        )
+
+    # --input_dir processes EVERY *.json in the directory, so it must not point at
+    # the shared af3_inputs dir (which accumulates one JSON per design across the
+    # whole run). Use a fresh dir holding only this batch. Copy the run's target
+    # MSAs into it so generate_msas reuses them (no ColabFold fallback). Use an
+    # absolute output_dir and copy (not symlink): a relative symlink resolves
+    # against the link's own directory, not cwd, so it would dangle -> the a3m
+    # would be "missing" -> ColabFold; copying also keeps rmtree away from the
+    # shared originals.
+    output_dir = os.path.abspath(output_dir)
+    shared_msas = os.path.join(output_dir, "af3_inputs", "msas")
+    batch_dir = os.path.join(output_dir, "af3_batch_inputs")
+    if os.path.lexists(batch_dir):
+        shutil.rmtree(batch_dir)
+    batch_msas = os.path.join(batch_dir, "msas")
+    os.makedirs(batch_msas)
+    if os.path.isdir(shared_msas):
+        for _f in os.listdir(shared_msas):
+            if _f.endswith(".a3m"):
+                shutil.copy(
+                    os.path.join(shared_msas, _f), os.path.join(batch_msas, _f)
+                )
+
+    names = []
+    for d in designs:
+        input_json_data = create_input_dict(
+            d["binder_seq"], d["target_seq"], binder_chain,
+            d["target_chains"], d["name"], d["seed"],
+        )
+        if msa_mode in ["local", "colabfold", "target"]:
+            input_json_data = generate_msas(
+                input_json_data,
+                run_settings["msa_db_dir"],
+                batch_dir,
+                binder_chain,
+                msa_mode,
+                use_metagenomic_db=run_settings["use_metagenomic_db"],
+                cache_binder_msa=run_settings.get("cache_binder_msa", False),
+            )
+        with open(os.path.join(batch_dir, f"{d['name']}.json"), "w") as f:
+            json.dump(input_json_data, f)
+        names.append(d["name"])
+
+    run_cmds = [
+        "singularity", "exec", "--nv",
+        "--env", "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu",
+        "--bind", f"{output_dir}:/root/af_output",
+        "--bind", f"{batch_dir}:/root/af_input",
+        "--bind", f"{run_settings['af3_model_dir']}:/root/models",
+        "--bind", f"{run_settings['af3_db_dir']}:/root/public_databases",
+        "--bind", f"{run_settings['af3_repo_path']}:/root/alphafold3",
+        run_settings["af3_sif_path"],
+        "python", "/root/alphafold3/run_alphafold.py",
+        "--model_dir=/root/models",
+        "--db_dir=/root/public_databases",
+        f"--output_dir={output_dir}",
+        f"--input_dir={batch_dir}",
+    ]
+    popen = subprocess.Popen(
+        run_cmds, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        universal_newlines=True,
+    )
+    for line in popen.stdout:
+        continue
+    popen.stdout.close()
+    return_code = popen.wait()
+    if return_code:
+        raise subprocess.CalledProcessError(return_code, run_cmds)
+
+    results = {}
+    for name in names:
+        results[name] = extract_structure_and_scores(
+            output_dir, name, binder_chain, select_mode=select_mode
+        )
+    return results
+
+
 def main(
     input_json: str,
     output_dir: str,

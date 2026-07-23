@@ -192,6 +192,46 @@ def main(cfg: DictConfig):
         # Final filter check - run filters on MPNN redesigned sequences
         # ====================================================================================
 
+        # Optional: batch every AbMPNN AF3 prediction into ONE singularity call
+        # (--input_dir) so the model loads/compiles once instead of per sequence.
+        # Same method/seeds/samples; only removes repeated AF3 startup overhead.
+        # On any failure it falls back to the normal per-sequence AF3 path.
+        af3_batch = {}
+        if (
+            run_settings.get("af3_batch_redesign", False)
+            and run_settings.get("structure_model") == "af3"
+            and len(abmpnn_sequences) > 1
+        ):
+            structures_directory = io.layout.trajectories / "structures"
+            _binder_chain = target_settings.get("binder_chain", "B")
+            _target_chain = target_settings["target_chain"]
+            _seqs = utils.get_sequence_from_pdb(run_settings["starting_pdb_complex"])
+            _target_seq = [_seqs[ch] for ch in _target_chain.split(",")]
+            _n_seed = run_settings.get("num_af3_seed", 5)
+            _batch_designs = [
+                {
+                    "name": f"{design_name}_abmpnn_{j + 1}",
+                    "binder_seq": s["seq"],
+                    "target_seq": _target_seq,
+                    "target_chains": _target_chain,
+                    "seed": [int(x) for x in np.random.randint(0, 999999, size=_n_seed)],
+                }
+                for j, s in enumerate(abmpnn_sequences)
+            ]
+            print(f"[AF3 BATCH] predicting {len(_batch_designs)} AbMPNN sequences in one AF3 call")
+            try:
+                af3_batch = filter_utils.af3.run_af3_batch(
+                    _batch_designs,
+                    str(structures_directory),
+                    run_settings,
+                    binder_chain=_binder_chain,
+                    msa_mode=run_settings["msa_mode"],
+                    select_mode=select_mode,
+                )
+            except Exception as e:
+                print(f"[AF3 BATCH] failed ({e}); falling back to per-sequence AF3")
+                af3_batch = {}
+
         # Process MPNN redesigned sequences
         if len(abmpnn_sequences) > 0:
             for j, abmpnn_sequence in enumerate(abmpnn_sequences):
@@ -213,6 +253,7 @@ def main(cfg: DictConfig):
                         multi_relax=multi_relax,
                         select_mode=select_mode,
                         af3_seed_size=run_settings.get("num_af3_seed", 5),
+                        precomputed_structure=af3_batch.get(mpnn_trajectory.design_name),
                     )
                 )
                 # save trajectory

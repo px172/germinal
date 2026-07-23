@@ -30,6 +30,7 @@ def run_filters(
     multi_relax: bool = False,
     select_mode: str = "best",
     af3_seed_size: int = 5,
+    precomputed_structure: Optional[Tuple] = None,
 ) -> Tuple[dict, dict, bool, str]:
     """Run filters and compute metrics for a single design trajectory.
 
@@ -86,20 +87,27 @@ def run_filters(
         )
     cdr3 = np.array(h3_positions) + 1
 
-    external_pdb, external_metrics, ipsae = run_structure_prediction(
-        trajectory_sequence=trajectory_sequence,
-        target_sequence=target_sequence,
-        target_chain=target_chain,
-        binder_chain=binder_chain,
-        structures_directory=structures_directory,
-        design_name=trajectory.design_name,
-        run_settings=run_settings,
-        hotspot_residue = target_settings.get("hotspot_residue", None),
-        target_len=target_len,
-        select_mode=select_mode,
-        af3_seed_size=af3_seed_size,
-        h3_positions=h3_positions,
-    )
+    # Reuse a structure prediction computed ahead of time (e.g. AbMPNN
+    # predictions batched into one AF3 --input_dir call) instead of launching a
+    # fresh prediction here. Everything downstream (relax, interface, filters)
+    # is unchanged.
+    if precomputed_structure is not None:
+        external_pdb, external_metrics, ipsae = precomputed_structure
+    else:
+        external_pdb, external_metrics, ipsae = run_structure_prediction(
+            trajectory_sequence=trajectory_sequence,
+            target_sequence=target_sequence,
+            target_chain=target_chain,
+            binder_chain=binder_chain,
+            structures_directory=structures_directory,
+            design_name=trajectory.design_name,
+            run_settings=run_settings,
+            hotspot_residue = target_settings.get("hotspot_residue", None),
+            target_len=target_len,
+            select_mode=select_mode,
+            af3_seed_size=af3_seed_size,
+            h3_positions=h3_positions,
+        )
 
     # ========================== FastRelax ==========================
     if multi_relax:
