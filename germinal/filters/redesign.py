@@ -12,7 +12,7 @@ import tempfile
 import multiprocessing as mp
 import pickle
 from typing import Dict, List, Any, Tuple
-from germinal.utils.utils import hotspot_residues, clear_memory, get_sequence_from_pdb
+from germinal.utils.utils import hotspot_residues, clear_memory, get_sequence_from_pdb, resolve_cdr_bias
 from colabdesign.mpnn import mk_mpnn_model
 
 mp.set_start_method("spawn", force=True)
@@ -170,6 +170,22 @@ def get_abmpnn_sequences(
         residues_to_fix = set(residues_to_fix + interface_residues_pdb_ids)
     else:
         residues_to_fix = set(residues_to_fix)
+
+    # Also pin cdr_bias "force" positions so the redesign keeps them. cdr_bias
+    # only biases hallucination; the forced residues sit inside the CDRs, which
+    # are exactly what AbMPNN redesigns, so without this the final sequence can
+    # drift off the forced residues (observed: 5/32 changed). "forbid" positions
+    # have no per-position AbMPNN equivalent (omit_AAs covers global omits).
+    cdr_bias = run_settings.get("cdr_bias")
+    if cdr_bias:
+        forced = resolve_cdr_bias(
+            cdr_bias, run_settings["cdr_lengths"], run_settings["fw_lengths"]
+        )
+        residues_to_fix |= {
+            f"{binder_chain}{abs_pos + 1}"
+            for abs_pos, _aa, mode in forced
+            if mode == "force"
+        }
 
     residues_to_fix = ",".join(residues_to_fix)
 
