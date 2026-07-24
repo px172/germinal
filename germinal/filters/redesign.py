@@ -176,8 +176,10 @@ def get_abmpnn_sequences(
     # are exactly what AbMPNN redesigns, so without this the final sequence can
     # drift off the forced residues (observed: 5/32 changed). "forbid" positions
     # have no per-position AbMPNN equivalent (omit_AAs covers global omits).
+    # Toggle with cdr_bias_fix_redesign (default true): set false to let AbMPNN
+    # redesign freely and treat cdr_bias as a hallucination-only guide.
     cdr_bias = run_settings.get("cdr_bias")
-    if cdr_bias:
+    if cdr_bias and run_settings.get("cdr_bias_fix_redesign", True):
         forced = resolve_cdr_bias(
             cdr_bias, run_settings["cdr_lengths"], run_settings["fw_lengths"]
         )

@@ -144,6 +144,17 @@ def test_cdr_bias_forced_positions_survive_redesign():
         f"expected all {len(forced)} forced positions to drift without the fix, "
         f"got {len(drifted)}"
     )
+
+    # cdr_bias_fix_redesign=False: cdr_bias present but AbMPNN redesigns freely,
+    # so the forced positions must drift just like the no-cdr_bias case.
+    out3 = _run(pdb, dict(base, cdr_bias=CDR_BIAS, cdr_bias_fix_redesign=False),
+                cdr_positions)[0]["seq"]
+    off = [p for p, _a in forced if out3[p] == MARKER]
+    assert len(off) == len(forced), (
+        f"expected all forced positions to drift with cdr_bias_fix_redesign=False, "
+        f"got {len(off)}"
+    )
+
     return len(forced), len(forbid)
 
 
