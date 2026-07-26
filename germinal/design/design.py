@@ -220,6 +220,34 @@ def germinal_design(
             f"{len(forbidden)} forbidden {forbidden} (binder-local positions)"
         )
 
+    # fix_linker: pin the scFv VH-VL linker to its scaffold (GS) sequence. The
+    # linker is non-CDR, so cdr_bias never touches it and AbMPNN's framework
+    # fixing just keeps whatever hallucination produced -- and hallucination
+    # drifts the low-information GS linker into structured residues (observed:
+    # up to 5 substitutions). Force it to the scaffold linker
+    # (starting_binder_seq[vh_len : length-vl_len]) via the same +1e7 bias, so it
+    # stays GS from hallucination through the fixed-framework redesign.
+    if run_settings.get("fix_linker", False) and run_settings.get("type") == "scfv":
+        if vh_len and vl_len and starting_binder_seq:
+            aa_order = residue_constants.restype_order
+            bias = np.asarray(af_model._inputs["bias"], dtype=np.float64)
+            lk = list(range(vh_len, length - vl_len))
+            for pos in lk:
+                aa = starting_binder_seq[pos]
+                if aa in aa_order:
+                    bias[pos, aa_order[aa]] += 1e7
+            af_model._inputs["bias"] = bias
+            print(
+                f"Applied fix_linker: pinned {len(lk)} linker positions "
+                f"(binder {vh_len + 1}-{length - vl_len}) to scaffold "
+                f"'{starting_binder_seq[vh_len:length - vl_len]}'"
+            )
+        else:
+            print(
+                "[CONFIG WARNING] fix_linker=true but vh_len/vl_len/"
+                "starting_binder_seq missing; skipping linker fix."
+            )
+
     # Configure loss function weights based on specified settings
     af_model.opt["weights"].update(
         {
