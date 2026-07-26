@@ -599,6 +599,13 @@ def _run_af3(
         "--nv",
         "--env",
         "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu",
+        # Force the in-container AF3 JAX to allocate on demand (~14GB) instead of
+        # preallocating ~0.75*VRAM (~72GB on a 96GB card). singularity does NOT
+        # reliably pass the host XLA_PYTHON_CLIENT_PREALLOCATE into the container,
+        # so set it explicitly -- otherwise two AF3 jobs (or an AF3 job next to
+        # another GPU tenant) collide and OOM.
+        "--env",
+        "XLA_PYTHON_CLIENT_PREALLOCATE=false",
         "--bind",
         f"{output_dir}:/root/af_output",
         "--bind",
@@ -797,6 +804,9 @@ def run_af3_batch(
     run_cmds = [
         "singularity", "exec", "--nv",
         "--env", "LD_LIBRARY_PATH=/usr/lib/x86_64-linux-gnu",
+        # On-demand AF3 JAX allocation (~14GB) instead of ~0.75*VRAM preallocation,
+        # so batched/concurrent AF3 jobs don't OOM. See _run_af3 for details.
+        "--env", "XLA_PYTHON_CLIENT_PREALLOCATE=false",
         "--bind", f"{output_dir}:/root/af_output",
         "--bind", f"{batch_dir}:/root/af_input",
         "--bind", f"{run_settings['af3_model_dir']}:/root/models",
