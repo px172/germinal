@@ -621,8 +621,12 @@ def _run_af3(
         "/root/alphafold3/run_alphafold.py",
         "--model_dir=/root/models",
         "--db_dir=/root/public_databases",
-        f"--output_dir={output_dir}",
-        f"--json_path={input_path}",
+        # Point AF3 at the container mount points, NOT the host paths. The host
+        # output/input dirs are bind-mounted to /root/af_output and /root/af_input;
+        # passing the host path (e.g. an absolute /work/... path) makes AF3
+        # os.makedirs it inside the container where that path is read-only.
+        "--output_dir=/root/af_output",
+        f"--json_path=/root/af_input/{input_json['name']}.json",
     ]
 
     popen = subprocess.Popen(
@@ -816,8 +820,10 @@ def run_af3_batch(
         "python", "/root/alphafold3/run_alphafold.py",
         "--model_dir=/root/models",
         "--db_dir=/root/public_databases",
-        f"--output_dir={output_dir}",
-        f"--input_dir={batch_dir}",
+        # Container mount points, not host paths (see _run_af3): the host output
+        # dir may be an absolute /work/... path that is read-only in the container.
+        "--output_dir=/root/af_output",
+        "--input_dir=/root/af_input",
     ]
     popen = subprocess.Popen(
         run_cmds, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
